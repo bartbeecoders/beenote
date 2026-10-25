@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=BeeNote
+GenericName=Text Editor
+Comment=A notepad written in pure x86-64 assembly
+Exec=@BIN@ %f
+Icon=beenote
+Terminal=false
+Categories=Utility;TextEditor;
+Keywords=notepad;text;editor;notes;bee;
+MimeType=text/plain;
+StartupNotify=true
+StartupWMClass=beenote

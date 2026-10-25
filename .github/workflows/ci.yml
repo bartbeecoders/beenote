@@ -1,0 +1,102 @@
+# BeeNote CI: every push and pull request builds both programs and tests
+# them; a v<VERSION> tag also publishes a GitHub release with dist/.
+#   linux    Arch Linux (the fonts the tests expect), scripts/build-all.sh:
+#            build/beenote + build/beenote.exe, the headless Wayland tests
+#            (tools/fakewl.py), the dist/ packages
+#   windows  the packed beenote.exe on Windows Server: --version, and a
+#            start-up check (the window opens and the program keeps running)
+#   release  on a tag: checks the tag against VERSION, uploads dist/
+# scripts/release.sh makes the tag.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install tools
+        run: |
+          pacman -Syu --noconfirm --needed git binutils python jq zip \
+            ttf-jetbrains-mono-nerd ttf-liberation
+      - uses: actions/checkout@v4
+      - name: Check a tag against VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          v=$(tr -d '[:space:]' < VERSION)
+          [ "${GITHUB_REF_NAME}" = "v$v" ] || { echo "tag ${GITHUB_REF_NAME} is not v$v (VERSION)"; exit 1; }
+      - name: Build, test, pack
+        run: scripts/build-all.sh --no-vm
+      - name: Keep the test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shots
+          path: build/shots/
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  windows:
+    needs: linux
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Unpack
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist\beenote-*-windows-x86_64.zip
+          Expand-Archive $zip.FullName -DestinationPath win
+          $exe = (Get-ChildItem win -Recurse -Filter beenote.exe).FullName
+          "BEENOTE_EXE=$exe" | Out-File $env:GITHUB_ENV -Append
+          $v = $zip.Name -replace '^beenote-(.+)-windows-x86_64\.zip$', '$1'
+          "BEENOTE_VERSION=$v" | Out-File $env:GITHUB_ENV -Append
+      - name: beenote.exe --version
+        shell: pwsh
+        run: |
+          $out = (& $env:BEENOTE_EXE --version | Out-String).Trim()
+          Write-Host "got: $out"
+          if ($out -ne "BeeNote $env:BEENOTE_VERSION") { throw "expected 'BeeNote $env:BEENOTE_VERSION'" }
+      - name: Start-up check
+        shell: pwsh
+        run: |
+          Set-Content -Path start.txt -Value "hello from CI"
+          $p = Start-Process -FilePath $env:BEENOTE_EXE -ArgumentList (Resolve-Path start.txt) -PassThru
+          Start-Sleep -Seconds 5
+          $p.Refresh()
+          if ($p.HasExited) { throw "beenote.exe exited during start-up (code $($p.ExitCode))" }
+          Write-Host "running: window '$($p.MainWindowTitle)'"
+          $null = $p.CloseMainWindow()
+          if (-not $p.WaitForExit(5000)) { Stop-Process -Id $p.Id -Force; Write-Host "(stopped it)" }
+
+  release:
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" --title "BeeNote ${GITHUB_REF_NAME#v}" --generate-notes

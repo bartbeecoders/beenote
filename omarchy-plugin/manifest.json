@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "id": "bart.beenote",
+  "name": "BeeNote",
+  "version": "0.4.0",
+  "author": "Bart Roelant",
+  "description": "Open BeeNote from the Omarchy bar. A click focuses its window, or starts one.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "BeeNote",
+    "description": "Focus BeeNote, or start it.",
+    "category": "Apps",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "binary": "",
+      "file": ""
+    },
+    "schema": [
+      {
+        "key": "binary",
+        "type": "string",
+        "label": "BeeNote binary",
+        "defaultValue": "",
+        "description": "Empty uses ~/.local/bin/beenote, which scripts/deploy-omarchy.sh installs."
+      },
+      {
+        "key": "file",
+        "type": "path",
+        "label": "File to open",
+        "defaultValue": "",
+        "description": "Empty starts with an untitled note. A path opens that file."
+      }
+    ]
+  }
+}
