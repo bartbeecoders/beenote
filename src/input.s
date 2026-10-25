@@ -75,6 +75,8 @@ find_origin:    .skip 8
 clip_line:      .skip 8                 # the clipboard holds whole lines (ours)
 chbuf:          .skip 8
 drop_req:       .skip 1024
+name_keep:      .skip FNAME_MAX         # (c_open)
+open_path:      .skip FNAME_MAX
 dirbuf:         .skip 4096              # Tab completion
 lcp:            .skip 1024
 statb:          .skip 144
@@ -417,7 +419,15 @@ ed_key:
     jz      4f
     test    r13d, MOD_CTRL
     jnz     4f
-    mov     edi, r12d
+    lea     edi, [rbx-2]                # Alt+1..8: that tab, Alt+9: the last
+    cmp     edi, 8
+    ja      31f
+    jb      30f
+    mov     rdi, [rip+tab_n]
+    dec     rdi
+30: call    tab_switch
+    jmp     .Lek_ret
+31: mov     edi, r12d
     call    menu_find
     cmp     rax, -1
     je      .Lek_ret
@@ -427,17 +437,24 @@ ed_key:
     jmp     .Lek_ret
 4:  test    r13d, MOD_CTRL
     jz      .Lek_nav
-    # Ctrl shortcuts (by the key's letter on this keyboard layout)
+    # Ctrl shortcuts: by the key's letter on this keyboard layout, else by
+    #   the key (where the layout has no letter on it)
     lea     rax, [rip+ctrl_keys]
 5:  movzx   ecx, word ptr [rax]
     test    ecx, ecx
-    jz      .Lek_nav
+    jz      51f
     cmp     ecx, r14d
-    je      6f
-    cmp     ecx, ebx
     je      6f
     add     rax, 6
     jmp     5b
+51: lea     rax, [rip+ctrl_keys]
+52: movzx   ecx, word ptr [rax]
+    test    ecx, ecx
+    jz      .Lek_nav
+    cmp     ecx, ebx
+    je      6f
+    add     rax, 6
+    jmp     52b
 6:  movzx   edi, word ptr [rax+2]       # the command (with Shift: the other one)
     test    r13d, MOD_SHIFT
     jz      .Lek_cmd
@@ -503,6 +520,10 @@ ctrl_keys:      # key, command, command with Shift
     .short 33, CMD_FIND, 0               # F
     .short 34, CMD_GOTO, 0               # G
     .short 16, CMD_QUIT, 0               # Q
+    .short 17, CMD_CLOSE, 0              # W
+    .short 15, CMD_TABNEXT, CMD_TABPREV  # Tab
+    .short 109, CMD_TABNEXT, 0           # Page Down
+    .short 104, CMD_TABPREV, 0           # Page Up
     .short 13, CMD_ZOOMIN, CMD_ZOOMIN    # = / +
     .short 78, CMD_ZOOMIN, 0             # keypad +
     .short 12, CMD_ZOOMOUT, 0            # -
@@ -882,7 +903,7 @@ cmd_tab:
     .rept RECENT_N
     .quad c_recent
     .endr
-    .quad c_rclear
+    .quad c_rclear, c_close, c_tabnext, c_tabprev
 .equ CMD_N, (. - cmd_tab) / 8
 .text
 
@@ -901,23 +922,57 @@ run_cmd:
     pop     rbx
 9:  ret
 
-c_new:
-    call    ask_save
+c_new:                                  # a new tab
+    call    tab_new
     test    eax, eax
-    jz      9f
-    call    doc_reset
-    mov     qword ptr [rip+fname_len], 0
-    mov     byte ptr [rip+fname], 0
-    call    view_reset
+    jnz     9f
     SETMSG  "New document"
 9:  ret
 
-view_reset:
-    xor     eax, eax
-    mov     [rip+scroll_y], rax
-    mov     [rip+scroll_x], rax
-    mov     qword ptr [rip+follow], 1
+c_close:
+    mov     rdi, [rip+tab_cur]
+    jmp     close_tab
+
+# close_tab(rdi=tab) - asks first when it has unsaved changes; the active
+#   tab stays active unless it is the one closed
+close_tab:
+    push    rbx
+    push    r12
+    cmp     qword ptr [rip+modal], 0
+    jne     9f
+    mov     rbx, rdi
+    mov     r12, [rip+tab_cur]
+    cmp     rbx, r12
+    jne     1f
+    mov     r12, -1                     # (closing the active one: a neighbour)
+1:  call    tab_switch                  # (shown while it asks)
+    test    eax, eax
+    jnz     9f
+    call    ask_save
+    test    eax, eax
+    jz      9f
+    mov     qword ptr [rip+msg_len], 0
+    mov     rdi, r12
+    call    tab_drop
+9:  pop     r12
+    pop     rbx
     ret
+
+c_tabnext:
+    mov     rax, [rip+tab_cur]
+    inc     rax
+    cmp     rax, [rip+tab_n]
+    jb      1f
+    xor     eax, eax
+1:  mov     rdi, rax
+    jmp     tab_switch
+c_tabprev:
+    mov     rdi, [rip+tab_cur]
+    test    rdi, rdi
+    jnz     1f
+    mov     rdi, [rip+tab_n]
+1:  dec     rdi
+    jmp     tab_switch
 
 # set_fname_from_pbuf - the prompt's path (~ expanded) becomes the file name
 set_fname_from_pbuf:
@@ -933,60 +988,51 @@ set_fname_from_pbuf:
     mov     byte ptr [rdi], 0
     ret
 
-c_open:
-    call    ask_save
-    test    eax, eax
-    jz      9f
-    push    qword ptr [rip+fname_len]   # (cancelled: the name stays)
+c_open:                                 # the file opens in a tab of its own
+    push    rbx
+    mov     rbx, [rip+fname_len]        # (the dialog puts its choice in fname)
     lea     rsi, [rip+fname]
-    lea     rdi, [rip+pbuf]
-    mov     ecx, FNAME_MAX
-    cmp     rcx, PROMPT_MAX
-    jbe     1f
-    mov     ecx, PROMPT_MAX
-1:  rep     movsb
+    lea     rdi, [rip+name_keep]
+    lea     rcx, [rbx+1]
+    rep     movsb
     call    filedlg_run
-    pop     rcx
-    test    eax, eax
-    jnz     2f
-    mov     [rip+fname_len], rcx
-    lea     rsi, [rip+pbuf]
-    lea     rdi, [rip+fname]
+    push    rax
+    lea     rsi, [rip+fname]            # the choice
+    lea     rdi, [rip+open_path]
+    mov     rcx, [rip+fname_len]
     rep     movsb
     mov     byte ptr [rdi], 0
-    jmp     9f
-2:  call    doc_load
-    call    view_reset
-9:  ret
+    mov     [rip+fname_len], rbx        # the document's own name back
+    lea     rsi, [rip+name_keep]
+    lea     rdi, [rip+fname]
+    lea     rcx, [rbx+1]
+    rep     movsb
+    pop     rax
+    test    eax, eax
+    jz      9f
+    lea     rsi, [rip+open_path]
+    call    tab_open
+9:  pop     rbx
+    ret
 
 # c_recent(edi=CMD_RECENT + n) - open the nth recent file (run_cmd passes
 #   the command on in edi); one that no longer opens leaves the list
 c_recent:
     push    rbx
     lea     ebx, [rdi-CMD_RECENT]
-    call    ask_save
-    test    eax, eax
-    jz      9f
     mov     edi, ebx
     call    recent_path
     test    rax, rax
     jz      9f
-    lea     rdi, [rip+fname]
-    xor     ecx, ecx
-1:  mov     dl, [rax+rcx]
-    mov     [rdi+rcx], dl
-    test    dl, dl
-    jz      2f
-    inc     ecx
-    jmp     1b
-2:  mov     [rip+fname_len], rcx
-    call    doc_load
+    mov     rsi, rax
+    call    tab_open
     test    eax, eax
-    jz      3f
+    jz      9f
+    cmp     eax, -2                     # (no tab for it: it stays listed)
+    je      9f
     mov     edi, ebx
     call    recent_forget
     MSGADD  " \342\200\224 taken off the recent files"
-3:  call    view_reset
 9:  pop     rbx
     ret
 
@@ -1024,12 +1070,27 @@ c_saveas:
 8:  SETMSG  "Not saved"
     ret
 
-c_quit:
+c_quit:                                 # each tab with changes asks first
+    push    rbx
+    xor     ebx, ebx
+1:  cmp     rbx, [rip+tab_n]
+    jae     8f
+    mov     rdi, rbx
+    call    tab_info
+    test    rcx, rcx
+    jz      2f
+    mov     rdi, rbx
+    call    tab_switch
+    test    eax, eax
+    jnz     9f
     call    ask_save
     test    eax, eax
     jz      9f
-    mov     dword ptr [rip+quit_flag], 1
-9:  ret
+2:  inc     rbx
+    jmp     1b
+8:  mov     dword ptr [rip+quit_flag], 1
+9:  pop     rbx
+    ret
 
 c_undo:
     call    undo_cmd
@@ -2288,10 +2349,28 @@ on_button:
     mov     rsi, [rip+my]
     call    menu_title_at
     cmp     rax, -1
-    je      5f
+    je      41f
     mov     rdi, rax
     xor     esi, esi
     call    open_menu
+    jmp     .Lbt_ret
+41: mov     rdi, [rip+mx]               # the tab bar: a click picks a tab, its
+    mov     rsi, [rip+my]               #   x or a middle click closes it
+    call    tab_at
+    cmp     rax, -1
+    je      5f
+    test    rax, rax
+    js      .Lbt_ret
+    mov     rdi, rax
+    cmp     ebx, BTN_MIDDLE
+    je      42f
+    cmp     ebx, BTN_LEFT
+    jne     .Lbt_ret
+    test    edx, edx
+    jnz     42f
+    call    tab_switch
+    jmp     .Lbt_ret
+42: call    close_tab
     jmp     .Lbt_ret
 5:  cmp     qword ptr [rip+prompt_mode], 0  # the prompt bar: clicks elsewhere close Find
     je      6f
@@ -2489,21 +2568,8 @@ on_axis:
 on_drop:                                # a file was dropped on the window: open it
     cmp     qword ptr [rip+modal], 0
     jne     9f
-    call    ask_save
-    test    eax, eax
-    jz      9f
     lea     rsi, [rip+drop_req]
-    lea     rdi, [rip+fname]
-    xor     ecx, ecx
-1:  mov     al, [rsi+rcx]
-    mov     [rdi+rcx], al
-    test    al, al
-    jz      2f
-    inc     ecx
-    jmp     1b
-2:  mov     [rip+fname_len], rcx
-    call    doc_load
-    call    view_reset
+    jmp     tab_open
 9:  ret
 
 # =============================================================================

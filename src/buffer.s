@@ -47,6 +47,9 @@
 .globl doc_load
 .globl doc_save
 .globl update_want_col
+.globl doc_park
+.globl doc_unpark
+.globl doc_pristine
 
 .equ O_WRCREAT,     0x241               # O_WRONLY | O_CREAT | O_TRUNC
 .equ O_RDONLY_CL,   0x80000             # O_RDONLY | O_CLOEXEC
@@ -55,6 +58,12 @@
 .section .rodata
 .align 16
 nl16:           .fill 16, 1, 10
+.align 8
+doc_vars:       # a parked document's state, a qword each (PK_* in beenote.inc)
+    .quad tlen, cur, want_col, dirty_doc, fname_len, crlf, edit_kind
+    .quad prev_edit_kind, undo_top, redo_top, sel_anchor, scroll_y, scroll_x
+doc_vars_end:
+.equ DOC_NVARS, (doc_vars_end - doc_vars) / 8
 
 .section .data
 .align 8
@@ -810,6 +819,122 @@ doc_reset:                              # an empty document, no history
     mov     [rip+edit_kind], rax
     mov     [rip+prev_edit_kind], rax
     mov     qword ptr [rip+sel_anchor], -1
+    ret
+
+doc_pristine:                           # eax = 1: untitled, empty, never edited
+    xor     eax, eax
+    mov     rcx, [rip+fname_len]
+    or      rcx, [rip+tlen]
+    or      rcx, [rip+dirty_doc]
+    or      rcx, [rip+undo_top]
+    or      rcx, [rip+redo_top]
+    sete    al
+    ret
+
+# doc_park - the document (its state, name, text and both histories) is
+#   copied to memory of its own -> rax = that block, rdx = its size; rax =
+#   0 when there is no memory for it. The buffers are left as they were.
+#   Block: [state: PK_NAME][name: FNAME_MAX][text][undo][redo]
+doc_park:
+    push    rbx
+    push    r12
+    push    r13
+    mov     r12, [rip+tlen]
+    add     r12, [rip+undo_top]
+    add     r12, [rip+redo_top]
+    add     r12, PK_HDR + 4095
+    and     r12, -4096
+    mov     eax, SYS_MMAP
+    xor     edi, edi
+    mov     rsi, r12
+    mov     edx, PROT_RW
+    mov     r10d, 0x22                  # MAP_PRIVATE | MAP_ANONYMOUS
+    mov     r8, -1
+    xor     r9d, r9d
+    call    plat_sys
+    test    rax, rax
+    js      8f
+    mov     rbx, rax
+    lea     rsi, [rip+doc_vars]
+    xor     ecx, ecx
+1:  mov     rdx, [rsi+rcx*8]
+    mov     rdx, [rdx]
+    mov     [rbx+rcx*8], rdx
+    inc     ecx
+    cmp     ecx, DOC_NVARS
+    jb      1b
+    lea     rdi, [rbx+PK_NAME]
+    lea     rsi, [rip+fname]
+    mov     rdx, [rip+fname_len]
+    inc     rdx                         # (with its 0)
+    call    memmove
+    lea     r13, [rbx+PK_HDR]
+    mov     rdi, r13
+    lea     rsi, [rip+text]
+    mov     rdx, [rip+tlen]
+    call    memmove
+    add     r13, [rip+tlen]
+    mov     rdi, r13
+    lea     rsi, [rip+undo]
+    mov     rdx, [rip+undo_top]
+    call    memmove
+    add     r13, [rip+undo_top]
+    mov     rdi, r13
+    lea     rsi, [rip+redo]
+    mov     rdx, [rip+redo_top]
+    call    memmove
+    mov     rax, rbx
+    mov     rdx, r12
+    jmp     9f
+8:  xor     eax, eax
+9:  pop     r13
+    pop     r12
+    pop     rbx
+    ret
+
+# doc_unpark(rdi=block, rsi=its size) - a parked document comes back into
+#   the buffers; its block is freed
+doc_unpark:
+    push    rbx
+    push    r12
+    push    r13
+    mov     rbx, rdi
+    mov     r12, rsi
+    lea     rsi, [rip+doc_vars]
+    xor     ecx, ecx
+1:  mov     rdx, [rbx+rcx*8]
+    mov     rax, [rsi+rcx*8]
+    mov     [rax], rdx
+    inc     ecx
+    cmp     ecx, DOC_NVARS
+    jb      1b
+    lea     rdi, [rip+fname]
+    lea     rsi, [rbx+PK_NAME]
+    mov     rdx, [rip+fname_len]
+    inc     rdx
+    call    memmove
+    lea     r13, [rbx+PK_HDR]
+    lea     rdi, [rip+text]
+    mov     rsi, r13
+    mov     rdx, [rip+tlen]
+    call    memmove
+    add     r13, [rip+tlen]
+    lea     rdi, [rip+undo]
+    mov     rsi, r13
+    mov     rdx, [rip+undo_top]
+    call    memmove
+    add     r13, [rip+undo_top]
+    lea     rdi, [rip+redo]
+    mov     rsi, r13
+    mov     rdx, [rip+redo_top]
+    call    memmove
+    mov     eax, SYS_MUNMAP
+    mov     rdi, rbx
+    mov     rsi, r12
+    call    plat_sys
+    pop     r13
+    pop     r12
+    pop     rbx
     ret
 
 msg_add_name:                           # the file's name (not its folders)

@@ -17,6 +17,7 @@
 .globl msg
 .globl msg_len
 .globl msg_err
+.globl msg_err
 .globl th_map
 
 .section .bss

@@ -1,7 +1,7 @@
 # =============================================================================
 #  BeeNote - the window's contents: layout, the document view (line numbers,
 #  the cursor's line, the selection, the caret), the scrollbar, the menu bar
-#  and its menus, the status bar, the prompt bar and dialogs.
+#  and its menus, the tab bar, the status bar, the prompt bar and dialogs.
 #
 #  Everything is drawn in physical pixels in the Omarchy theme's colours;
 #  logical sizes go through to_px. Geometry the mouse needs (menu titles and
@@ -18,6 +18,7 @@
 .globl menu_title_at
 .globl menu_item_at
 .globl dlg_button_at
+.globl tab_at
 .globl menu_tab
 .globl mi_file
 .globl mi_file_var
@@ -82,6 +83,9 @@ dlg_nb:         .skip 8
 hover_thumb:    .skip 8
 L_mb_h:         .skip 8
 L_sb_h:         .skip 8
+L_tb_h:         .skip 8                 # the tab bar (0: one tab, none shown)
+L_tw:           .skip 8                 # a tab's width
+L_tx:           .skip 8                 # the first tab's x (<= 0: scrolled)
 L_pb_h:         .skip 8
 L_pb_y:         .skip 8
 L_ed_y:         .skip 8
@@ -120,6 +124,7 @@ s_app_title:    .asciz "BeeNote"
 s_untitled:     .asciz "Untitled"
 s_check:        .ascii "\342\234\223"   # ✓
 s_dot:          .ascii " \342\227\217"  # ●
+s_tab_x:        .ascii "\303\227"        # ×
 s_sep:          .ascii "    "
 s_title_tail:   .ascii " \342\200\224 BeeNote"   # " — BeeNote"
 s_title_tail_e:
@@ -155,6 +160,9 @@ mi_view:
     ITEM "Actual Size", "Ctrl+0", CMD_ZOOM0, 0
     SEP
     ITEM "Line Numbers", "", CMD_LNUM, 0, 1
+    SEP
+    ITEM "Next Tab", "Ctrl+Tab", CMD_TABNEXT, 0
+    ITEM "Previous Tab", "Ctrl+Shift+Tab", CMD_TABPREV, 0
 mi_view_end:
 mi_help:
     ITEM "Keyboard Shortcuts", "F1", CMD_HELP, 0
@@ -167,6 +175,7 @@ mi_file:                                # (writable: recent.s lists the files)
     ITEM "Open\342\200\246", "Ctrl+O", CMD_OPEN, 0
     ITEM "Save", "Ctrl+S", CMD_SAVE, 0
     ITEM "Save As\342\200\246", "Ctrl+Shift+S", CMD_SAVEAS, 5
+    ITEM "Close Tab", "Ctrl+W", CMD_CLOSE, 6
     SEP
 mi_file_var:                            # the recent files, then Quit
     ITEM "Quit", "Ctrl+Q", CMD_QUIT, 0
@@ -208,9 +217,12 @@ d_help_t:   .asciz "Keyboard shortcuts"
 .endm
 .align 8
 help_rows:
-    HK "Ctrl+N, Ctrl+O, Ctrl+S", "New, open, save"
+    HK "Ctrl+N, Ctrl+O, Ctrl+S", "New tab, open, save"
     HK "Ctrl+Shift+S", "Save as"
     HK "Ctrl+Q", "Quit"
+    HK "Ctrl+W", "Close the tab (or middle click it)"
+    HK "Ctrl+Tab, Ctrl+Shift+Tab", "Next, previous tab"
+    HK "Alt+1 ... Alt+9", "That tab (Alt+9: the last)"
     HK "Ctrl+Z, Ctrl+Shift+Z", "Undo, redo"
     HK "Ctrl+X, Ctrl+C, Ctrl+V", "Cut, copy, paste (no selection: the line)"
     HK "Ctrl+A", "Select all"
@@ -281,6 +293,12 @@ layout:
     SP      eax, 12
     add     eax, ebx
     mov     [rip+L_sb_h], rax
+    xor     eax, eax                    # the tab bar, for more than one tab
+    cmp     qword ptr [rip+tab_n], 1
+    jbe     0f
+    SP      eax, 12
+    add     eax, ebx
+0:  mov     [rip+L_tb_h], rax
     xor     eax, eax
     cmp     qword ptr [rip+prompt_mode], 0
     je      1f
@@ -290,11 +308,12 @@ layout:
     SP      eax, 12
     mov     [rip+L_scr_w], rax
     mov     rax, [rip+L_mb_h]
+    add     rax, [rip+L_tb_h]
     mov     [rip+L_ed_y], rax
     mov     eax, [rip+fb_h]             # the prompt bar ends where the status bar begins
     sub     rax, [rip+L_sb_h]
     mov     [rip+L_pb_y], rax
-    sub     rax, [rip+L_mb_h]
+    sub     rax, [rip+L_ed_y]
     sub     rax, [rip+L_pb_h]
     cmp     rax, 1
     jge     2f
@@ -354,13 +373,40 @@ layout:
     add     r12, r13
     inc     ebx
     jmp     4b
-5:  cmp     qword ptr [rip+menu_open], 0
+5:  call    tab_geom
+    cmp     qword ptr [rip+menu_open], 0
     jl      9f
     call    dropdown_geom
 9:  pop     r14
     pop     r13
     pop     r12
     pop     rbx
+    ret
+
+# tab_geom - the tabs share the window's width (within limits); when they
+#   do not fit, the strip scrolls to keep the active one in view
+tab_geom:
+    mov     eax, [rip+fb_w]
+    xor     edx, edx
+    div     qword ptr [rip+tab_n]
+    SP      ecx, 220
+    cmp     rax, rcx
+    jle     1f
+    mov     rax, rcx
+1:  SP      ecx, 100
+    cmp     rax, rcx
+    jge     2f
+    mov     rax, rcx
+2:  mov     [rip+L_tw], rax
+    mov     rcx, [rip+tab_cur]
+    inc     rcx
+    imul    rcx, rax
+    mov     eax, [rip+fb_w]
+    sub     rcx, rax
+    jge     3f
+    xor     ecx, ecx
+3:  neg     rcx
+    mov     [rip+L_tx], rcx
     ret
 
 # the open menu: its items and their count -> rax, rdx
@@ -566,6 +612,35 @@ dlg_button_at:
     jmp     1b
 9:  ret
 
+# tab_at(edi=x, esi=y) -> rax = the tab there, -2 on the tab bar but on no
+#   tab, -1 off the tab bar; edx = 1 on the tab's close mark (its right end)
+tab_at:
+    mov     rax, -1
+    cmp     qword ptr [rip+L_tb_h], 0
+    je      9f
+    cmp     rsi, [rip+L_mb_h]
+    jl      9f
+    mov     rcx, [rip+L_mb_h]
+    add     rcx, [rip+L_tb_h]
+    cmp     rsi, rcx
+    jge     9f
+    mov     rax, rdi
+    sub     rax, [rip+L_tx]
+    js      8f
+    xor     edx, edx
+    div     qword ptr [rip+L_tw]
+    cmp     rax, [rip+tab_n]
+    jae     8f
+    mov     rcx, [rip+L_tw]
+    sub     rcx, rdx                    # (from the right end)
+    SP      r8d, 30
+    xor     edx, edx
+    cmp     rcx, r8
+    setle   dl
+    ret
+8:  mov     rax, -2
+9:  ret
+
 # pos_from_xy(edi=x, esi=y) -> rax = the document position there
 pos_from_xy:
     push    rbx
@@ -624,6 +699,7 @@ ui_draw:
     call    draw_scrollbar
     call    reset_clip
     call    draw_menubar
+    call    draw_tabbar
     call    draw_status
     cmp     qword ptr [rip+prompt_mode], 0
     je      1f
@@ -1025,6 +1101,149 @@ draw_menubar:
 9:  pop     r13
     pop     r12
     pop     rbx
+    ret
+
+# draw_tabbar - under the menu bar when more than one tab is open: each
+#   file's name, the active tab in the document's colour, and a close mark
+#   (a dot instead while it has unsaved changes)
+draw_tabbar:
+    cmp     qword ptr [rip+L_tb_h], 0
+    je      .Ldt_none
+    push    rbx
+    push    rbp
+    push    r12
+    push    r13
+    push    r14
+    push    r15
+    sub     rsp, 24                     # [rsp] unsaved, [rsp+8] name, [rsp+16] its bytes
+    mov     r13, [rip+L_mb_h]           # r13 = top
+    xor     edi, edi
+    mov     esi, r13d
+    mov     edx, [rip+fb_w]
+    mov     ecx, [rip+L_tb_h]
+    COL     r8d, C_BG_DARK
+    call    rect
+    xor     edi, edi                    # a hairline under it
+    mov     esi, r13d
+    add     esi, [rip+L_tb_h]
+    dec     esi
+    mov     edx, [rip+fb_w]
+    mov     ecx, 1
+    COL     r8d, C_BG_LIGHT
+    call    rect
+    mov     r14, [rip+L_tb_h]
+    shr     r14, 1
+    add     r14, r13                    # r14 = centre
+    xor     ebx, ebx                    # rbx = the tab
+1:  cmp     rbx, [rip+tab_n]
+    jae     9f
+    mov     r12, rbx                    # r12 = its x
+    imul    r12, [rip+L_tw]
+    add     r12, [rip+L_tx]
+    mov     eax, [rip+fb_w]
+    cmp     r12, rax
+    jge     9f
+    cmp     rbx, [rip+tab_cur]
+    jne     2f
+    mov     edi, r12d                   # the active one: the document's colour
+    mov     esi, r13d
+    mov     edx, [rip+L_tw]
+    mov     ecx, [rip+L_tb_h]
+    COL     r8d, C_BG
+    call    rect
+    mov     edi, r12d                   # ... with an accent line on top
+    mov     esi, r13d
+    mov     edx, [rip+L_tw]
+    SP      ecx, 2
+    COL     r8d, C_ACCENT
+    call    rect
+    jmp     3f
+2:  SP      eax, 8                      # the others: a line between them
+    mov     edi, r12d
+    add     edi, [rip+L_tw]
+    dec     edi
+    lea     esi, [r13+rax]
+    mov     ecx, [rip+L_tb_h]
+    sub     ecx, eax
+    sub     ecx, eax
+    mov     edx, 1
+    COL     r8d, C_BG_LIGHT
+    call    rect
+3:  mov     rdi, rbx                    # the name (not its folders)
+    call    tab_info
+    mov     [rsp], rcx
+    test    rdx, rdx
+    jnz     4f
+    lea     rsi, [rip+s_untitled]
+    mov     edx, 8
+    jmp     5f
+4:  lea     rax, [rsi+rdx]
+    mov     rcx, rax
+41: cmp     rcx, rsi
+    jbe     42f
+    cmp     byte ptr [rcx-1], '/'
+    je      42f
+    dec     rcx
+    jmp     41b
+42: sub     rax, rcx
+    mov     rsi, rcx
+    mov     rdx, rax
+5:  mov     [rsp+8], rsi
+    mov     [rsp+16], rdx
+    SP      eax, 12                     # clipped short of the mark
+    lea     edi, [r12+rax]
+    mov     esi, r13d
+    mov     edx, r12d
+    add     edx, [rip+L_tw]
+    SP      eax, 32
+    sub     edx, eax
+    mov     ecx, r13d
+    add     ecx, [rip+L_tb_h]
+    call    set_clip_px
+    mov     rdi, [rsp+8]
+    mov     rsi, [rsp+16]
+    SP      eax, 12
+    lea     edx, [r12+rax]
+    mov     ecx, r14d
+    COL     r8d, C_FG_DIM
+    cmp     rbx, [rip+tab_cur]
+    jne     6f
+    COL     r8d, C_FG
+6:  call    ui_text
+    call    reset_clip
+    lea     rbp, [rip+s_tab_x]          # the mark: x, or a dot when unsaved
+    mov     qword ptr [rsp+8], 2
+    COL     r15d, C_FG_DIM
+    cmp     qword ptr [rsp], 0
+    je      7f
+    lea     rbp, [rip+s_dot+1]
+    mov     qword ptr [rsp+8], 3
+    COL     r15d, C_ACCENT
+7:  mov     rdi, rbp
+    mov     rsi, [rsp+8]
+    call    ui_text_w
+    mov     edx, r12d                   # centred 16 px from the right end
+    add     edx, [rip+L_tw]
+    SP      ecx, 16
+    sub     edx, ecx
+    shr     eax, 1
+    sub     edx, eax
+    mov     rdi, rbp
+    mov     rsi, [rsp+8]
+    mov     ecx, r14d
+    mov     r8d, r15d
+    call    ui_text
+    inc     rbx
+    jmp     1b
+9:  call    reset_clip
+    add     rsp, 24
+    pop     r15
+    pop     r14
+    pop     r13
+    pop     r12
+    pop     rbp
+    pop     rbx
+.Ldt_none:
     ret
 
 # sb_add(rsi=text, rdx=bytes) / sb_cstr(rdi=asciz) / sb_num(rdi) - build sb

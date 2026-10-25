@@ -75,16 +75,17 @@ so a theme switch shows straight away. `--no-plugin` skips the bar button, and
 | | |
 |---|---|
 | Menus | **File, Edit, Search, View, Help**: click them, or press F10 / Alt+letter. Right-click opens the Edit menu |
-| Files | Ctrl+N new, Ctrl+O the **Open dialog** (folders first, file sizes; type to filter or type a path, Backspace goes up, Ctrl+H shows hidden files, double-click opens), Ctrl+S save, Ctrl+Shift+S save as (Tab completes a path, `~` works). You can drop a file on the window. The File menu lists the **10 recent files** (Alt+F, then 1–9 or 0), kept in `~/.local/state/beenote/recent` and shared by every BeeNote window |
+| Tabs | Every document opens in a **tab** of its own; the tab bar shows up once a second one is open. Ctrl+N a new tab, Ctrl+W close it (or click its ×, or middle-click it), Ctrl+Tab / Ctrl+Shift+Tab (or Ctrl+PgDn / PgUp) the next / previous one, Alt+1–8 a tab by number, Alt+9 the last. A file that is open already gets its tab back. `beenote a.txt b.txt` opens both |
+| Files | Ctrl+O the **Open dialog** (folders first, file sizes; type to filter or type a path, Backspace goes up, Ctrl+H shows hidden files, double-click opens), Ctrl+S save, Ctrl+Shift+S save as (Tab completes a path, `~` works). You can drop a file on the window. The File menu lists the **10 recent files** (Alt+F, then 1–9 or 0), kept in `~/.local/state/beenote/recent` and shared by every BeeNote window |
 | Editing | Ctrl+Z / Ctrl+Shift+Z undo / redo, Ctrl+X / C / V cut / copy / paste through the system clipboard (with no selection, the whole line), Ctrl+A select all |
 | Search | Ctrl+F finds as you type (Enter: next match, Shift+Enter: previous), F3 / Shift+F3, Ctrl+G go to line |
 | Selecting | Shift with any movement key; mouse drag; double-click selects a word, triple-click a line |
 | View | Ctrl++ / Ctrl+- / Ctrl+0 or Ctrl+wheel to zoom; line numbers can be turned off |
-| Other | F1 lists every shortcut. Quitting, New and Open ask before discarding changes |
+| Other | F1 lists every shortcut. Closing a tab and quitting ask before discarding changes (quitting asks for each tab that has them) |
 
 It handles UTF-8 text, dead keys and any keyboard layout (shortcuts follow the
 letter printed on the key), CRLF files (saved back as CRLF), fractional scaling
-and documents up to 16 MB.
+and up to 64 tabs of documents up to 16 MB each.
 
 ## Source
 
@@ -96,6 +97,7 @@ and documents up to 16 MB.
 | `src/recent.s` | the recent files in the File menu |
 | `src/view.s` | layout and drawing |
 | `src/buffer.s` | the document: editing, undo, search, files |
+| `src/tabs.s` | the tabs: the active one is edited in place, the others are parked in memory of their own |
 | `src/omarchy.s` | the Omarchy theme and BeeNote's configuration |
 | `src/plat_linux.s`, `src/plat_win.s` | the platform: system calls on Linux; on Windows also the window, input and clipboard |
 | `src/gfx.s` | fonts and text drawing |

@@ -16,11 +16,12 @@
 .section .bss
 .align 8
 pollfds:        .skip 8*3               # Wayland, key repeat, theme check
+argv_files:     .skip 8                 # the next file named on the command line
 
 .section .rodata
 s_opt_version:  .asciz "--version"
 s_opt_help:     .asciz "--help"
-s_help:         .ascii "Usage: beenote [file]\n"
+s_help:         .ascii "Usage: beenote [file...]\n"
                 .ascii "A notepad for Wayland in pure x86-64 assembly. Its colours and font\n"
                 .ascii "follow the current Omarchy theme. F1 in the window lists the keys.\n"
                 .ascii "BEENOTE_FONT=/path/to/font.ttf picks another font.\n"
@@ -38,6 +39,8 @@ _start:
     lea     rcx, [rsp+rax*8+16]         # envp = argv + argc + 1
     mov     [rip+envp], rcx
     mov     rbx, [rsp+16]               # argv[1] (0 if absent)
+    lea     rax, [rsp+16]               # (the files: argv[1...])
+    mov     [rip+argv_files], rax
     and     rsp, -16
     test    rbx, rbx
     jz      .Lnoarg
@@ -65,23 +68,12 @@ _start:
     lea     rsi, [rip+s_opt_help]
     call    str_eq
     test    eax, eax
-    jz      2f
+    jz      .Lnoarg
     mov     edi, 1
     lea     rsi, [rip+s_help]
     mov     edx, s_help_end - s_help
     call    write_all
     jmp     .Lexit
-2:  lea     rdi, [rip+fname]            # beenote file: open (or start) it
-    xor     ecx, ecx
-3:  mov     al, [rbx+rcx]
-    mov     [rdi+rcx], al
-    test    al, al
-    jz      4f
-    inc     ecx
-    cmp     ecx, FNAME_MAX-1
-    jb      3b
-    mov     byte ptr [rdi+rcx], 0
-4:  mov     [rip+fname_len], rcx
 .Lnoarg:
     lea     rdi, [rip+s_wd]
     call    getenv
@@ -93,9 +85,20 @@ _start:
     call    ui_init                     # the font
     call    doc_reset
     call    recent_init                 # the File menu's recent files
-    cmp     qword ptr [rip+fname_len], 0
-    je      6f
-    call    doc_load
+3:  mov     rax, [rip+argv_files]       # beenote file...: each opens (or starts)
+    mov     rsi, [rax]                  #   in a tab of its own
+    test    rsi, rsi
+    jz      4f
+    add     qword ptr [rip+argv_files], 8
+    call    tab_open
+    jmp     3b
+4:  cmp     qword ptr [rip+tab_n], 1    # several: the first one is shown
+    jbe     6f
+    xor     edi, edi
+    call    tab_switch
+    cmp     qword ptr [rip+msg_err], 0
+    jne     6f
+    mov     qword ptr [rip+msg_len], 0
 6:  call    wl_connect
     call    alloc_id                    # wl_display.get_registry
     mov     [rip+id_registry], eax

@@ -10,6 +10,11 @@
 .equ PROMPT_MAX,    1024
 .equ TABW,          4                   # tab stop (a power of two)
 .equ RECENT_N,      10                  # recent files in the File menu
+.equ TABS_MAX,      64                  # documents open at once
+.equ PK_DIRTY,      24                  # a parked document (buffer.s doc_park):
+.equ PK_FNLEN,      32                  #   dirty_doc, fname_len, the name,
+.equ PK_NAME,       128                 #   then the text and the histories
+.equ PK_HDR,        PK_NAME + FNAME_MAX
 .equ U_INS,         1                   # undo record kinds
 .equ U_DEL,         2
 
@@ -86,6 +91,9 @@
 .equ CMD_ABOUT,     22
 .equ CMD_RECENT,    23                  # 23 .. 32: open the nth recent file
 .equ CMD_RCLEAR,    CMD_RECENT+RECENT_N
+.equ CMD_CLOSE,     CMD_RCLEAR+1        # tabs
+.equ CMD_TABNEXT,   CMD_RCLEAR+2
+.equ CMD_TABPREV,   CMD_RCLEAR+3
 
 # ---- input events (queued while the compositor's messages are parsed) -------
 .equ EV_KEY,        1                   # a = evdev code, b = symbol, c = mods | layout code << 16

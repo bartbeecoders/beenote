@@ -627,7 +627,7 @@ def files_and_mouse():
     f.type('readme')
     f.key(28)
     check(f.title == 'readme.md \u2014 BeeNote', f'filter + Enter opened: {f.title!r}')
-    combo(f, CTRL, 24)                      # a typed path
+    combo(f, CTRL, 24)                      # a typed path: open already, its tab
     f.mods(1); f.keyev(41, 1); f.keyev(41, 0); f.mods(0)   # Shift+` = ~
     f.type('/draft.txt')
     f.key(28)
@@ -642,11 +642,12 @@ def files_and_mouse():
     check(f.title == 'readme.md \u2014 BeeNote', f'double clicks opened {f.title!r}')
 
     # ---- drag selection, triple click, the context menu ----------------------------
-    f.drag(58 + 6 * 10, 32 + 12, 58 + 6 * 10, 32 + 25 + 12)   # 'beta gamma\ndelta '
+    # (two tabs are open: the text starts below the tab bar, at y = 62)
+    f.drag(58 + 6 * 10, 62 + 12, 58 + 6 * 10, 62 + 25 + 12)   # 'beta gamma\ndelta '
     combo(f, CTRL, 46)
     got = f.clipboard()
     check(got.startswith('beta gamma\n') and got.startswith('beta gamma\ndelt'), f'drag selected {got!r}')
-    f.move(100, 32 + 50 + 12)
+    f.move(100, 62 + 50 + 12)
     for _ in range(3):
         f.button(True); f.button(False)
     combo(f, CTRL, 46)
@@ -778,7 +779,11 @@ def recent_files():
     gone = want[5]
     os.remove(gone)                         # a file that went away
     f.key(68)
-    f.type('6')
+    f.type('6')                             # (open in a tab: that tab)
+    check(f.title == f'{os.path.basename(gone)} \u2014 BeeNote', f'6 showed its tab: {f.title!r}')
+    combo(f, CTRL, 17)                      # Ctrl+W: closed, now it is not open
+    f.key(68)
+    f.type('1')                             # (it went to the top)
     check(gone not in saved() and len(saved()) == 9, f'a missing file leaves the list: {len(saved())}')
 
     combo(f, CTRL, 31)                      # saving lists the file too
@@ -798,6 +803,100 @@ def recent_files():
     g.proc.kill()
 
 
+def tabs():
+    """Several documents at once, a tab each."""
+    home = tempfile.mkdtemp()
+    theme(home, NORD)
+    a, b, c = (os.path.join(home, n) for n in ('a.txt', 'b.txt', 'c.txt'))
+    for p, t in ((a, 'alpha\n'), (b, 'bravo\n'), (c, ''.join(f'c{i}\n' for i in range(300)))):
+        with open(p, 'w') as fh:
+            fh.write(t)
+    f = Fake(args=[a, b], home=home)        # two files: two tabs, the first shown
+    f.pump(1.5, until_frame=True)
+    f.keymap('tests/keymaps/us.xkb')
+    f.enter(400, 300)
+    check(f.title == 'a.txt \u2014 BeeNote', f'the first file is shown: {f.title!r}')
+    check(px(f, 640, 45) == 0x222730, f'the tab bar is shown: {px(f, 640, 45):06x}')
+    f.shot('50_tabs.png')
+    combo(f, CTRL, 15)                      # Ctrl+Tab
+    check(f.title == 'b.txt \u2014 BeeNote', f'Ctrl+Tab: {f.title!r}')
+    combo(f, CTRL, 15)                      # (wraps around)
+    check(f.title == 'a.txt \u2014 BeeNote', f'Ctrl+Tab wraps: {f.title!r}')
+    combo(f, CTRL | SHIFT, 15)
+    check(f.title == 'b.txt \u2014 BeeNote', f'Ctrl+Shift+Tab: {f.title!r}')
+
+    # each tab keeps its own text, cursor and undo history
+    combo(f, CTRL, 107)
+    f.type('B')
+    combo(f, CTRL, 104)                     # Ctrl+PgUp: a.txt
+    combo(f, CTRL, 107)
+    f.type('A1 A2')
+    combo(f, CTRL, 109)                     # Ctrl+PgDn: b.txt
+    combo(f, CTRL, 44)                      # undo here: only b's typing
+    combo(f, CTRL, 31)
+    check(open(b).read() == 'bravo\n', f'b undone and saved: {open(b).read()!r}')
+    combo(f, CTRL | SHIFT, 44)              # redo
+    f.click(100, 46)                        # the first tab, clicked
+    check(f.title.startswith('\u25cf a.txt'), f'a click picks a tab: {f.title!r}')
+    combo(f, CTRL, 31)
+    check(open(a).read() == 'alpha\nA1 A2', f'a kept its typing: {open(a).read()!r}')
+    f.shot('51_tab_unsaved.png')
+
+    # the Open dialog and dropped files open new tabs; scrolling stays per tab
+    f.drop_files([c])
+    check(f.title == 'c.txt \u2014 BeeNote', f'a dropped file, a new tab: {f.title!r}')
+    combo(f, CTRL, 107)                     # Ctrl+End: scrolled to the bottom
+    f.key(103)                              # Up: the last line, c299
+    combo(f, ALT, 2)                        # Alt+1: the first tab
+    check(f.title == 'a.txt \u2014 BeeNote', f'Alt+1: {f.title!r}')
+    combo(f, ALT, 10)                       # Alt+9: the last
+    check(f.title == 'c.txt \u2014 BeeNote', f'Alt+9: {f.title!r}')
+    combo(f, CTRL, 46)                      # (no selection: the cursor's line)
+    check(f.clipboard() == 'c299\n', f'the cursor stayed at the end: {f.clipboard()!r}')
+    f.shot('52_three_tabs.png')
+    f.drop_files([a])                       # open already: its tab
+    check(f.title == 'a.txt \u2014 BeeNote', f'an open file is not opened twice: {f.title!r}')
+
+    # Ctrl+N: a new tab; Ctrl+W asks about changes
+    combo(f, CTRL, 49)
+    check(f.title == 'Untitled \u2014 BeeNote', f'Ctrl+N: {f.title!r}')
+    f.type('scratch')
+    f.shot('53_new_tab.png')
+    combo(f, CTRL, 17)                      # Ctrl+W
+    f.shot('54_close_asks.png')
+    f.key(1)                                # Esc: Cancel, the tab stays
+    check(f.title == '\u25cf Untitled \u2014 BeeNote', f'cancelled: {f.title!r}')
+    combo(f, CTRL, 17)
+    f.type('d')                             # Don't Save: closed, the one before shows
+    check(f.title == 'c.txt \u2014 BeeNote', f'closed: {f.title!r}')
+
+    # the mouse: the x on a tab closes it, the others stay where they were
+    f.click(220 * 1 + 220 - 16, 46)         # b.txt's x (tabs are 220 px; redone: unsaved)
+    check(f.title == '\u25cf b.txt \u2014 BeeNote', f'it shows b.txt while it asks: {f.title!r}')
+    f.type('d')
+    check(f.title == 'c.txt \u2014 BeeNote', f'closing another tab keeps this one: {f.title!r}')
+    combo(f, CTRL, 15)
+    check(f.title == 'a.txt \u2014 BeeNote', f'b.txt was closed: {f.title!r}')
+    f.click(220 + 100, 46, 0x112)           # middle click: c.txt
+    check(f.title == 'a.txt \u2014 BeeNote', f'middle click closed c.txt: {f.title!r}')
+    check(px(f, 640, 45) == 0x2e3440, f'one tab left: no tab bar: {px(f, 640, 45):06x}')
+    f.shot('55_one_tab.png')
+
+    # quitting asks for each tab with changes
+    combo(f, CTRL, 49)
+    f.type('one')
+    combo(f, CTRL, 49)
+    f.type('two')
+    combo(f, CTRL, 16)                      # Ctrl+Q
+    check(f.title == '\u25cf Untitled \u2014 BeeNote' and f.proc.poll() is None, 'Ctrl+Q asks')
+    f.type('d')                             # the first: Don't Save
+    f.pump(0.3)
+    check(f.proc.poll() is None, 'then asks about the second')
+    f.type('d')
+    f.pump(1.0)
+    check(f.proc.poll() == 0, f'and quits (exit {f.proc.poll()})')
+
+
 if __name__ == '__main__':
     try:
         main()
@@ -806,6 +905,7 @@ if __name__ == '__main__':
     files_and_mouse()
     config_live()
     recent_files()
+    tabs()
     print()
     print('FAILED: %d' % len(FAILS) if FAILS else 'all ok')
     sys.exit(1 if FAILS else 0)
