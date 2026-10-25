@@ -7,6 +7,11 @@ result is a ~56 KB static binary.
 
 It is built to fit into [Omarchy](https://omarchy.org): it takes its colours from the current Omarchy
 theme and its font from `omarchy font`, and both update live when they change.
+
+**Download:** the [releases](https://github.com/bartbeecoders/beenote/releases)
+have the Linux binary (x86-64, any Wayland compositor), `beenote.exe` for
+Windows 11, and the sources (`scripts/deploy-omarchy.sh` in them installs
+BeeNote into Omarchy).
 It installs a launcher entry and a bar button, like BeeModel. The Wayland,
 keyboard, TrueType and clipboard code comes from BeeModel.
 
@@ -98,3 +103,7 @@ and documents up to 16 MB.
 
 `tui/beenote.s` is the first version: a terminal notepad in a single file.
 Build it with `as tui/beenote.s -o tui/beenote.o && ld tui/beenote.o -o tui/beenote`.
+
+## License
+
+MIT; see [LICENSE](LICENSE).

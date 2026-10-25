@@ -63,13 +63,14 @@ rm -rf dist
 mkdir -p dist/stage
 lin="beenote-$VERSION-linux-x86_64" win="beenote-$VERSION-windows-x86_64" src="beenote-$VERSION-src"
 mkdir dist/stage/"$lin" dist/stage/"$win"
-cp build/beenote README.md dist/stage/"$lin"/
+cp build/beenote README.md LICENSE dist/stage/"$lin"/
 cp build/beenote.exe dist/stage/"$win"/
 sed 's/$/\r/' README.md > dist/stage/"$win"/README.txt
+sed 's/$/\r/' LICENSE > dist/stage/"$win"/LICENSE.txt
 tar -C dist/stage -czf dist/"$lin".tar.gz --owner=0 --group=0 "$lin"
 (cd dist/stage && zip -qr ../"$win".zip "$win")
 tar -czf dist/"$src".tar.gz --owner=0 --group=0 --transform "s|^|$src/|" \
-    --exclude=__pycache__ VERSION README.md src scripts tools tests omarchy-plugin tui
+    --exclude=__pycache__ VERSION README.md LICENSE src scripts tools tests omarchy-plugin tui
 rm -rf dist/stage
 (cd dist && sha256sum ./*.tar.gz ./*.zip | sed 's| \./| |' > SHA256SUMS)
 ls -l dist | tail -n +2 | awk '{printf "    %-44s %9s\n", $9, $5}'

@@ -98,5 +98,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --repo "$GITHUB_REPOSITORY" --title "BeeNote ${GITHUB_REF_NAME#v}" --generate-notes
+          v=${GITHUB_REF_NAME#v}
+          cat > notes.md <<EOF
+          ## Downloads
+          - **Linux** (x86-64, any Wayland compositor): \`beenote-$v-linux-x86_64.tar.gz\`. Unpack it and run \`./beenote [file]\`.
+          - **Windows 11** (x64): \`beenote-$v-windows-x86_64.zip\`. Unpack it and run \`beenote.exe\`. Windows SmartScreen may warn the first time, because the program is not signed.
+          - **Omarchy**: \`beenote-$v-src.tar.gz\`. Unpack it and run \`scripts/deploy-omarchy.sh\` (needs binutils), which installs the launcher entry and the bar button.
+          - \`SHA256SUMS\`: the checksums.
+
+          A single static binary with no dependencies, written in x86-64 assembly. MIT licensed.
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "BeeNote $v" --notes-file notes.md --generate-notes
