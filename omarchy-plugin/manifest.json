@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bart.beenote",
   "name": "BeeNote",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": "Bart Roelant",
   "description": "Open BeeNote from the Omarchy bar. A click focuses its window, or starts one.",
   "kinds": ["bar-widget"],

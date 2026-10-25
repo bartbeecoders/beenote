@@ -102,6 +102,10 @@
 .equ WM_DPICHANGED,     0x02E0
 .equ WS_OVERLAPPEDWINDOW, 0x00CF0000
 .equ WS_EX_ACCEPTFILES, 0x10
+.equ DWMWA_USE_IMMERSIVE_DARK_MODE, 20
+.equ DWMWA_BORDER_COLOR,  34
+.equ DWMWA_CAPTION_COLOR, 35
+.equ DWMWA_TEXT_COLOR,    36
 .equ CW_USEDEFAULT,     0x80000000
 .equ VK_SHIFT,          0x10
 .equ VK_CONTROL,        0x11
@@ -134,6 +138,7 @@ w_char:         .skip 4                 # the key's text, its modifiers, its
 w_mods:         .skip 4                 #   letter's QWERTY code (kb_*)
 w_layout:       .skip 4
 w_hisur:        .skip 4                 # a high surrogate waiting for its low one
+w_dwmv:         .skip 4                 # DwmSetWindowAttribute's value
 clip_own:       .skip 4
 clip_len:       .skip 4
 .align 16
@@ -1450,8 +1455,7 @@ w_create:
     mov     edx, 1
     call    [rip+__imp_LoadIconW]
     lea     rcx, [rip+w_wc]
-    mov     [rcx+32], rax
-    mov     [rcx+72], rax
+    mov     [rcx+32], rax               # (no small one: Windows picks its size)
     call    [rip+__imp_RegisterClassExW]
     call    [rip+__imp_GetDpiForSystem]
     test    eax, eax
@@ -1511,7 +1515,8 @@ w_create:
     je      2f
     mov     [rip+w_dpi], eax
     call    w_apply_dpi
-2:  mov     rcx, [rip+w_hwnd]
+2:  call    w_frame_colours
+    mov     rcx, [rip+w_hwnd]
     mov     edx, 1                      # SW_SHOWNORMAL (not the hidden start's)
     call    [rip+__imp_ShowWindow]
     mov     rcx, [rip+w_hwnd]
@@ -1536,6 +1541,53 @@ w_load_cursor:                          # r12d = id -> [rbx], rbx += 8
     add     rsp, 40
     mov     [rbx], rax
     add     rbx, 8
+    ret
+
+# w_frame_colours - the title bar and border in the theme's colours: the
+#   menu bar's background and the text's colour (Windows 11), dark or
+#   light buttons by that background (Windows 10 too). Errors are ignored.
+w_frame_colours:
+    WFRAME
+    mov     eax, [rip+th_col+C_BG_DARK] # dark when 2r + 5g + b < 8 * 128
+    mov     ecx, eax
+    shr     ecx, 16
+    movzx   edx, ah
+    movzx   r8d, al
+    lea     ecx, [rcx*2+r8]
+    lea     edx, [rdx*4+rdx]
+    add     ecx, edx
+    xor     eax, eax
+    cmp     ecx, 1024
+    setb    al
+    mov     edx, DWMWA_USE_IMMERSIVE_DARK_MODE
+    call    w_dwm_set
+    mov     eax, [rip+th_col+C_BG_DARK]
+    call    w_colorref
+    mov     edx, DWMWA_CAPTION_COLOR
+    call    w_dwm_set
+    mov     eax, [rip+th_col+C_BG_DARK]
+    call    w_colorref
+    mov     edx, DWMWA_BORDER_COLOR
+    call    w_dwm_set
+    mov     eax, [rip+th_col+C_FG]
+    call    w_colorref
+    mov     edx, DWMWA_TEXT_COLOR
+    call    w_dwm_set
+    WRET
+
+w_colorref:                             # eax = 0xRRGGBB -> 0x00BBGGRR
+    bswap   eax
+    shr     eax, 8
+    ret
+
+w_dwm_set:                              # DwmSetWindowAttribute(w_hwnd, edx, &eax, 4)
+    sub     rsp, 40
+    mov     [rip+w_dwmv], eax
+    mov     rcx, [rip+w_hwnd]
+    lea     r8, [rip+w_dwmv]
+    mov     r9d, 4
+    call    [rip+__imp_DwmSetWindowAttribute]
+    add     rsp, 40
     ret
 
 # w_apply_dpi - w_dpi as the UI scale (96 dpi = 1.0); fonts at the new size
@@ -2168,10 +2220,14 @@ w_evdev:
     jmp     .Lwp_zero
 .Lwp_timer:                             # the configuration and theme, each second
     call    theme_check
-    test    eax, 2
+    mov     ebx, eax
+    test    eax, 1
     jz      1f
+    call    w_frame_colours
+1:  test    ebx, 2
+    jz      2f
     call    ui_config_changed
-1:  test    eax, eax
+2:  test    ebx, ebx
     jz      .Lwp_zero
     mov     dword ptr [rip+dirty], 1
     jmp     .Lwp_zero
@@ -2529,3 +2585,73 @@ DLL 4, SHELL32.dll
 IMPORT 4, DragFinish
 IMPORT 4, DragQueryFileW
 DLL_END 4
+
+DLL 5, dwmapi.dll
+IMPORT 5, DwmSetWindowAttribute
+DLL_END 5
+
+# ---- the resources: the icon (src/icon, tools/make-icon.sh) ------------------
+#   RT_ICON 1..ICONS_N, one PNG each, and RT_GROUP_ICON 1 listing them, in
+#   US English. Offsets in the directories are from the section's start;
+#   the data entries hold RVAs. ld points the resource directory at .rsrc.
+.equ ICONS_N, 8
+.macro ICONS m
+    \m 1, 16
+    \m 2, 20
+    \m 3, 24
+    \m 4, 32
+    \m 5, 40
+    \m 6, 48
+    \m 7, 64
+    \m 8, 256
+.endm
+.macro RDIR n                           # a directory with n entries by id
+    .long   0, 0
+    .short  0, 0, 0, \n
+.endm
+.macro RLANG data                       # one language, 0x409: its data entry
+    RDIR    1
+    .long   0x409, \data - rsrc
+.endm
+.macro ICON_ENT id, px                  # level 2: icon id -> its language
+    .long   \id, 0x80000000 + (rs_icon_l\id - rsrc)
+.endm
+.macro ICON_LANG id, px
+rs_icon_l\id: RLANG rs_icon_d\id
+.endm
+.macro ICON_DATA id, px                 # the data entries
+rs_icon_d\id: .long rs_icon_\id - IMAGE_BASE, rs_icon_\id\()_end - rs_icon_\id, 0, 0
+.endm
+.macro ICON_GRP id, px                  # GRPICONDIRENTRY (256 is 0)
+    .byte   \px & 0xff, \px & 0xff, 0, 0
+    .short  1, 32
+    .long   rs_icon_\id\()_end - rs_icon_\id
+    .short  \id
+.endm
+.macro ICON_PNG id, px
+    .balign 8
+rs_icon_\id: .incbin "icon/beenote-\px\().png"
+rs_icon_\id\()_end:
+.endm
+
+.section .rsrc,"a"
+.balign 4
+rsrc:
+    RDIR    2                           # by type: RT_ICON, RT_GROUP_ICON
+    .long   3, 0x80000000 + (rs_icons - rsrc)
+    .long   14, 0x80000000 + (rs_groups - rsrc)
+rs_icons:
+    RDIR    ICONS_N
+    ICONS   ICON_ENT
+rs_groups:
+    RDIR    1
+    .long   1, 0x80000000 + (rs_group_l - rsrc)
+    ICONS   ICON_LANG
+rs_group_l: RLANG rs_group_d
+    ICONS   ICON_DATA
+rs_group_d: .long rs_group - IMAGE_BASE, rs_group_end - rs_group, 0, 0
+rs_group:
+    .short  0, 1, ICONS_N               # GRPICONDIR
+    ICONS   ICON_GRP
+rs_group_end:
+    ICONS   ICON_PNG

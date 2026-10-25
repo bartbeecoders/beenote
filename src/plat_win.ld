@@ -34,6 +34,10 @@ SECTIONS
     KEEP (SORT(*)(.idata$6))
     KEEP (SORT(*)(.idata$7))
   }
+  .rsrc BLOCK(__section_alignment__) :
+  {
+    KEEP (*(.rsrc))
+  }
   /DISCARD/ :
   {
     *(.note.*) *(.comment) *(.eh_frame)
